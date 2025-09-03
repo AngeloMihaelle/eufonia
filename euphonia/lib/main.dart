@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:audio_session/audio_session.dart';
 
 void main() {
   runApp(const EuphoniaApp());
@@ -17,7 +19,8 @@ class EuphoniaApp extends StatelessWidget {
       title: 'Euphonia',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color.fromARGB(255, 14, 233, 105)),
+          seedColor: const Color.fromARGB(255, 14, 233, 105),
+        ),
         useMaterial3: true,
       ),
       home: const FileBrowserScreen(),
@@ -35,10 +38,23 @@ class FileBrowserScreen extends StatefulWidget {
 class _FileBrowserScreenState extends State<FileBrowserScreen> {
   String? selectedPath;
   List<File> files = [];
+  final AudioPlayer _player = AudioPlayer();
+  File? _currentFile;
+
+  @override
+  void initState() {
+    super.initState();
+    _initAudioSession();
+  }
+
+  Future<void> _initAudioSession() async {
+    final session = await AudioSession.instance;
+    await session.configure(const AudioSessionConfiguration.music());
+  }
 
   Future<void> _pickFilesOrFolder() async {
     if (kIsWeb || Platform.isWindows || Platform.isLinux) {
-      // Desktop o Web: elige carpeta
+      // Desktop o Web: seleccionar carpeta
       String? path = await FilePicker.platform.getDirectoryPath();
       if (path != null) {
         final dir = Directory(path);
@@ -55,7 +71,6 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
       // Pedir permiso de almacenamiento
       PermissionStatus status = await Permission.manageExternalStorage.request();
       if (status.isGranted) {
-        // Android 11+ requiere usar FilePicker para elegir carpeta
         String? path = await FilePicker.platform.getDirectoryPath();
         if (path != null) {
           final dir = Directory(path);
@@ -69,12 +84,32 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
           });
         }
       } else {
-        // Usuario no dio permisos
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Storage permission denied')),
         );
       }
     }
+  }
+
+  Future<void> _playFile(File file) async {
+    try {
+      await _player.setFilePath(file.path);
+      await _player.play();
+      setState(() {
+        _currentFile = file;
+      });
+    } catch (e) {
+      debugPrint("Error playing file: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error playing file: $e')),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _player.dispose();
+    super.dispose();
   }
 
   @override
@@ -102,20 +137,27 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                     itemCount: files.length,
                     itemBuilder: (context, index) {
                       final file = files[index];
+                      final filename =
+                          file.path.split(Platform.pathSeparator).last;
                       return ListTile(
                         leading: const Icon(Icons.music_note),
-                        title: Text(
-                          file.path.split(Platform.pathSeparator).last,
-                        ),
-                        onTap: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Selected: ${file.path}')),
-                          );
-                        },
+                        title: Text(filename),
+                        subtitle: file == _currentFile
+                            ? const Text("▶ Now Playing")
+                            : null,
+                        onTap: () => _playFile(file),
                       );
                     },
                   ),
           ),
+          if (_currentFile != null)
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Text(
+                "Now playing: ${_currentFile!.path.split(Platform.pathSeparator).last}",
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
         ],
       ),
     );
