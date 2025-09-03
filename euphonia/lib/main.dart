@@ -7,6 +7,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const EuphoniaApp());
 }
 
@@ -54,18 +55,23 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
 
   Future<void> _pickFilesOrFolder() async {
     if (kIsWeb || Platform.isWindows || Platform.isLinux) {
-      // Desktop o Web: seleccionar carpeta
       String? path = await FilePicker.platform.getDirectoryPath();
       if (path != null) {
-        final dir = Directory(path);
-        final allFiles = dir.listSync(recursive: true, followLinks: false);
-        setState(() {
-          selectedPath = path;
-          files = allFiles
-              .whereType<File>()
-              .where((f) => f.path.toLowerCase().endsWith('.mp3'))
-              .toList();
-        });
+        try {
+          final dir = Directory(path);
+          final allFiles = dir.listSync(recursive: true, followLinks: false);
+          setState(() {
+            selectedPath = path;
+            files = allFiles
+                .whereType<File>()
+                .where((f) => f.path.toLowerCase().endsWith('.mp3'))
+                .toList();
+          });
+        } catch (e) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error reading folder: $e')),
+          );
+        }
       }
     } else if (Platform.isAndroid) {
       // Pedir permiso de almacenamiento
@@ -91,19 +97,33 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     }
   }
 
-  Future<void> _playFile(File file) async {
-    try {
-      await _player.setFilePath(file.path);
-      await _player.play();
-      setState(() {
-        _currentFile = file;
-      });
-    } catch (e) {
-      debugPrint("Error playing file: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error playing file: $e')),
-      );
+  Future<void> _togglePlayPause(File file) async {
+    if (_currentFile == file) {
+      if (_player.playing) {
+        await _player.pause();
+      } else {
+        await _player.play();
+      }
+    } else {
+      try {
+        await _player.setFilePath(file.path);
+        await _player.play();
+        setState(() {
+          _currentFile = file;
+        });
+      } catch (e) {
+        debugPrint("Error playing file: $e");
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error playing file: $e')),
+        );
+      }
     }
+  }
+
+  String _formatDuration(Duration d) {
+    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
   }
 
   @override
@@ -145,20 +165,43 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                         subtitle: file == _currentFile
                             ? const Text("▶ Now Playing")
                             : null,
-                        onTap: () => _playFile(file),
+                        onTap: () => _togglePlayPause(file),
                       );
                     },
                   ),
           ),
           if (_currentFile != null)
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Text(
-                "Now playing: ${_currentFile!.path.split(Platform.pathSeparator).last}",
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
+            StreamBuilder<Duration>(
+              stream: _player.positionStream,
+              builder: (context, snapshot) {
+                final position = snapshot.data ?? Duration.zero;
+                final total = _player.duration ?? Duration.zero;
+                return Column(
+                  children: [
+                    Text(
+                      _currentFile!.path.split(Platform.pathSeparator).last,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    Slider(
+                      min: 0,
+                      max: total.inMilliseconds.toDouble(),
+                      value: position.inMilliseconds.clamp(0, total.inMilliseconds).toDouble(),
+                      onChanged: (value) {
+                        _player.seek(Duration(milliseconds: value.toInt()));
+                      },
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(_formatDuration(position)),
+                        Text(_formatDuration(total)),
+                      ],
+                    ),
+                  ],
+                );
+              },
             ),
-        ],
+        ], // Children
       ),
     );
   }
