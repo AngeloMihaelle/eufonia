@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 void main() {
   runApp(const EuphoniaApp());
@@ -15,7 +16,8 @@ class EuphoniaApp extends StatelessWidget {
     return MaterialApp(
       title: 'Euphonia',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color.fromARGB(255, 14, 233, 105)),
+        colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color.fromARGB(255, 14, 233, 105)),
         useMaterial3: true,
       ),
       home: const FileBrowserScreen(),
@@ -36,7 +38,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
 
   Future<void> _pickFilesOrFolder() async {
     if (kIsWeb || Platform.isWindows || Platform.isLinux) {
-      // Desktop : pick a folder
+      // Desktop o Web: elige carpeta
       String? path = await FilePicker.platform.getDirectoryPath();
       if (path != null) {
         final dir = Directory(path);
@@ -45,22 +47,32 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
           selectedPath = path;
           files = allFiles
               .whereType<File>()
-              .where((f) => f.path.toLowerCase().trim().endsWith('.mp3'))
+              .where((f) => f.path.toLowerCase().endsWith('.mp3'))
               .toList();
         });
       }
     } else if (Platform.isAndroid) {
-      // Android: pick multiple files
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        allowMultiple: true,
-        type: FileType.custom,
-        allowedExtensions: ['mp3'],
-      );
-      if (result != null) {
-        setState(() {
-          selectedPath = 'Selected ${result.paths.length} file(s)';
-          files = result.paths.map((p) => File(p!)).toList();
-        });
+      // Pedir permiso de almacenamiento
+      PermissionStatus status = await Permission.manageExternalStorage.request();
+      if (status.isGranted) {
+        // Android 11+ requiere usar FilePicker para elegir carpeta
+        String? path = await FilePicker.platform.getDirectoryPath();
+        if (path != null) {
+          final dir = Directory(path);
+          final allFiles = dir.listSync(recursive: true, followLinks: false);
+          setState(() {
+            selectedPath = path;
+            files = allFiles
+                .whereType<File>()
+                .where((f) => f.path.toLowerCase().endsWith('.mp3'))
+                .toList();
+          });
+        }
+      } else {
+        // Usuario no dio permisos
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Storage permission denied')),
+        );
       }
     }
   }
