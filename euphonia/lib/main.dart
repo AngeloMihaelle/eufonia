@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 
@@ -14,7 +15,7 @@ class EuphoniaApp extends StatelessWidget {
     return MaterialApp(
       title: 'Euphonia',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color.fromARGB(255, 14, 233, 105)),
         useMaterial3: true,
       ),
       home: const FileBrowserScreen(),
@@ -31,19 +32,36 @@ class FileBrowserScreen extends StatefulWidget {
 
 class _FileBrowserScreenState extends State<FileBrowserScreen> {
   String? selectedPath;
-  List<FileSystemEntity> files = [];
+  List<File> files = [];
 
-  Future<void> _pickFolder() async {
-    String? path = await FilePicker.platform.getDirectoryPath();
-    if (path != null) {
-      final dir = Directory(path);
-      final allFiles = dir.listSync(recursive: false, followLinks: false);
-      setState(() {
-        selectedPath = path;
-        files = allFiles
-            .where((f) => f.path.toLowerCase().endsWith('.mp3'))
-            .toList();
-      });
+  Future<void> _pickFilesOrFolder() async {
+    if (kIsWeb || Platform.isWindows || Platform.isLinux) {
+      // Desktop : pick a folder
+      String? path = await FilePicker.platform.getDirectoryPath();
+      if (path != null) {
+        final dir = Directory(path);
+        final allFiles = dir.listSync(recursive: true, followLinks: false);
+        setState(() {
+          selectedPath = path;
+          files = allFiles
+              .whereType<File>()
+              .where((f) => f.path.toLowerCase().trim().endsWith('.mp3'))
+              .toList();
+        });
+      }
+    } else if (Platform.isAndroid) {
+      // Android: pick multiple files
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        allowMultiple: true,
+        type: FileType.custom,
+        allowedExtensions: ['mp3'],
+      );
+      if (result != null) {
+        setState(() {
+          selectedPath = 'Selected ${result.paths.length} file(s)';
+          files = result.paths.map((p) => File(p!)).toList();
+        });
+      }
     }
   }
 
@@ -56,14 +74,14 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
       body: Column(
         children: [
           ElevatedButton.icon(
-            onPressed: _pickFolder,
+            onPressed: _pickFilesOrFolder,
             icon: const Icon(Icons.folder_open),
-            label: const Text('Select Folder'),
+            label: const Text('Select Folder / Files'),
           ),
           if (selectedPath != null)
             Padding(
               padding: const EdgeInsets.all(8.0),
-              child: Text('Selected folder:\n$selectedPath'),
+              child: Text('Selected:\n$selectedPath'),
             ),
           Expanded(
             child: files.isEmpty
@@ -74,8 +92,9 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                       final file = files[index];
                       return ListTile(
                         leading: const Icon(Icons.music_note),
-                        title:
-                            Text(file.path.split(Platform.pathSeparator).last),
+                        title: Text(
+                          file.path.split(Platform.pathSeparator).last,
+                        ),
                         onTap: () {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(content: Text('Selected: ${file.path}')),
