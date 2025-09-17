@@ -6,9 +6,17 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 const Green = Color.fromARGB(255, 38, 86, 41);
 const IconSize = 24.0;
+
+enum PlaybackMode {
+  normal,    // Reproduce la lista y se detiene al final
+  loopOne,   // Repite la canción actual
+  loopAll,   // Repite toda la lista
+  shuffle    // Reproduce aleatorio sin repetir hasta agotar lista
+}
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -46,11 +54,13 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   final AudioPlayer _player = AudioPlayer();
   File? _currentFile;
   int _currentIndex = -1;
+  PlaybackMode _playbackMode = PlaybackMode.normal;
 
   @override
   void initState() {
     super.initState();
     _initAudioSession();
+    loadPlaybackMode();
 
     _player.playerStateStream.listen((state) {
       if (state.processingState == ProcessingState.completed && files.isNotEmpty) {
@@ -110,7 +120,73 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     }
   }
 
-  
+  // Guardar la carpeta seleccionada
+  Future<void> saveLastFolder(String path) async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString('last_folder', path);
+  }
+
+  // Cargar la última carpeta
+  Future<String?> loadLastFolder() async {
+  final prefs = await SharedPreferences.getInstance();
+  return prefs.getString('last_folder');
+  }
+
+  // Guardar el modo de reproducción (ej: 0=normal, 1=loop1, 2=loopAll, 3=random)
+  Future<void> savePlaybackMode(PlaybackMode mode) async {
+  final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('playback_mode', mode.index);
+  }
+
+  // Cargar el modo de reproducción
+  Future<void> loadPlaybackMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    final index = prefs.getInt('playback_mode') ?? 0;
+    setState(() {
+      _playbackMode = PlaybackMode.values[index];
+    });
+  }
+
+  Widget _buildLoopButton() {
+    IconData icon;
+    String tooltip;
+
+    switch (_playbackMode) {
+      case PlaybackMode.normal:
+        icon = Icons.repeat; // normal sin highlight
+        tooltip = "Normal (sin loop)";
+        break;
+      case PlaybackMode.loopOne:
+        icon = Icons.repeat_one;
+        tooltip = "Repetir canción";
+        break;
+      case PlaybackMode.loopAll:
+        icon = Icons.repeat;
+        tooltip = "Repetir toda la lista";
+        break;
+      case PlaybackMode.shuffle:
+        icon = Icons.shuffle;
+        tooltip = "Reproducción aleatoria";
+        break;
+    }
+
+    return Tooltip(
+      message: tooltip,
+      child: IconButton(
+        icon: Icon(icon, size: 32, color: Colors.green),
+        onPressed: () {
+          setState(() {
+            // cambiar al siguiente modo
+            _playbackMode = PlaybackMode.values[
+                (_playbackMode.index + 1) % PlaybackMode.values.length
+            ];
+            savePlaybackMode(_playbackMode);
+          });
+        },
+      ),
+    );
+  }
+
 
   Future<void> _playAtIndex(int index) async {
     if (index < 0 || index >= files.length) return;
@@ -131,7 +207,6 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     }
   }
 
-
   String _formatDuration(Duration d) {
     final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
@@ -143,6 +218,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     _player.dispose();
     super.dispose();
   }
+
   @override
   Widget build(BuildContext context) {
     return KeyboardListener(
@@ -398,6 +474,8 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                       ),
                     ),
                   ),
+                  // Botón de loop / shuffle
+                  _buildLoopButton(),
                 ],
               ),
               const SizedBox(height: 12),
