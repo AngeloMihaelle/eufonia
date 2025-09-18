@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -55,21 +56,51 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   File? _currentFile;
   int _currentIndex = -1;
   PlaybackMode _playbackMode = PlaybackMode.normal;
+  Timer? _saveTimer;
 
   @override
   void initState() {
     super.initState();
     _initAudioSession();
     loadPlaybackMode();
+    _restoreLastFolder();
+
+      // Escucha cambios de posición y guarda estado cada vez que cambia
+    _saveTimer = Timer.periodic(Duration(seconds: 1), (_) {
+      if (_player.playing) {
+        savePlaybackState();
+      }
+    });
 
     _player.playerStateStream.listen((state) {
       if (state.processingState == ProcessingState.completed && files.isNotEmpty) {
         final nextIndex = (_currentIndex + 1) % files.length;
         _playAtIndex(nextIndex);
+      }else if (!state.playing) {
+        savePlaybackState(); // Guardar estado al pausar
       }
     });
   }
 
+Future<void> _playAtIndex(int index) async {
+    if (index < 0 || index >= files.length) return;
+    try {
+      // Asegura estado limpio antes de cambiar de pista (evita "hay que presionar play otra vez")
+      await _player.stop();
+      await _player.setFilePath(files[index].path);
+      await _player.play(); // arranca de inmediato
+      setState(() {
+        _currentIndex = index;
+        _currentFile = files[index];
+      });
+      savePlaybackState();
+    } catch (e) {
+      debugPrint("Error playing file: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error playing file: $e')),
+      );
+    }
+  }
 
   Future<void> _initAudioSession() async {
     final session = await AudioSession.instance;
@@ -85,6 +116,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
           final allFiles = dir.listSync(recursive: true, followLinks: false);
           setState(() {
             selectedPath = path;
+            saveLastFolder(path);
             files = allFiles
                 .whereType<File>()
                 .where((f) => f.path.toLowerCase().endsWith('.mp3'))
@@ -147,6 +179,56 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     });
   }
 
+  Future<void> _restoreLastFolder() async {
+    final lastPath = await loadLastFolder();
+    if (lastPath != null) {
+      final dir = Directory(lastPath);
+      if (dir.existsSync()) {
+        final allFiles = dir.listSync(recursive: true, followLinks: false);
+        setState(() {
+          selectedPath = lastPath;
+          files = allFiles
+              .whereType<File>()
+              .where((f) => f.path.toLowerCase().endsWith('.mp3'))
+              .toList();
+        });
+        if (files.isNotEmpty) {
+          restorePlaybackState();
+        }
+      }
+    }
+  }
+
+  Future<void> savePlaybackState() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_currentIndex >= 0) {
+      await prefs.setInt('last_index', _currentIndex);
+      await prefs.setInt('last_position', _player.position.inMilliseconds);
+    }
+  }
+
+  Future<void> restorePlaybackState() async {
+    final prefs = await SharedPreferences.getInstance();
+    final lastIndex = prefs.getInt('last_index') ?? -1;
+    final lastPos = prefs.getInt('last_position') ?? 0;
+
+    if (lastIndex >= 0 && lastIndex < files.length) {
+      try {
+        await _player.setFilePath(files[lastIndex].path);
+        await _player.seek(Duration(milliseconds: lastPos));
+        // No llamamos a play, solo dejamos cargada y en pausa
+        setState(() {
+          _currentIndex = lastIndex;
+          _currentFile = files[lastIndex];
+        });
+      } catch (e) {
+        debugPrint("Error restoring playback: $e");
+      }
+    }
+  }
+
+
+
   Widget _buildLoopButton() {
     IconData icon;
     String tooltip;
@@ -187,26 +269,6 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     );
   }
 
-
-  Future<void> _playAtIndex(int index) async {
-    if (index < 0 || index >= files.length) return;
-    try {
-      // Asegura estado limpio antes de cambiar de pista (evita "hay que presionar play otra vez")
-      await _player.stop();
-      await _player.setFilePath(files[index].path);
-      await _player.play(); // arranca de inmediato
-      setState(() {
-        _currentIndex = index;
-        _currentFile = files[index];
-      });
-    } catch (e) {
-      debugPrint("Error playing file: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error playing file: $e')),
-      );
-    }
-  }
-
   String _formatDuration(Duration d) {
     final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
@@ -215,6 +277,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
 
   @override
   void dispose() {
+    _saveTimer?.cancel();
     _player.dispose();
     super.dispose();
   }
